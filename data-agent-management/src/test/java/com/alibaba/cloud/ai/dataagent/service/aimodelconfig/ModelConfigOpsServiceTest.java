@@ -22,11 +22,16 @@ import com.alibaba.cloud.ai.dataagent.properties.DataAgentProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.retry.support.RetryTemplate;
+import org.springframework.web.client.ResourceAccessException;
+
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -121,12 +126,12 @@ class ModelConfigOpsServiceTest {
 		when(modelConfigDataService.findById(1)).thenReturn(entity);
 
 		ChatModel chatModel = mock(ChatModel.class);
-		when(modelFactory.createChatModel(argThat(config -> "stored-api-key".equals(config.getApiKey()))))
+		when(modelFactory.createChatModel(argThat(config -> "stored-api-key".equals(config.getApiKey())), any(RetryTemplate.class)))
 			.thenReturn(chatModel);
 		when(chatModel.call("Hello")).thenReturn("Hi there");
 
 		assertDoesNotThrow(() -> service.testConnection(1));
-		verify(modelFactory).createChatModel(argThat(config -> "stored-api-key".equals(config.getApiKey())));
+		verify(modelFactory).createChatModel(argThat(config -> "stored-api-key".equals(config.getApiKey())), any(RetryTemplate.class));
 		verify(chatModel).call("Hello");
 	}
 
@@ -140,11 +145,11 @@ class ModelConfigOpsServiceTest {
 		when(modelConfigDataService.findById(2)).thenReturn(entity);
 
 		EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
-		when(modelFactory.createEmbeddingModel(any(ModelConfigDTO.class))).thenReturn(embeddingModel);
+		when(modelFactory.createEmbeddingModel(any(ModelConfigDTO.class), any(RetryTemplate.class))).thenReturn(embeddingModel);
 		when(embeddingModel.embed("Test")).thenReturn(new float[] { 0.1f, 0.2f });
 
 		assertDoesNotThrow(() -> service.testConnection(2));
-		verify(modelFactory).createEmbeddingModel(argThat(config -> "text-embedding".equals(config.getModelName())));
+		verify(modelFactory).createEmbeddingModel(argThat(config -> "text-embedding".equals(config.getModelName())), any(RetryTemplate.class));
 		verify(embeddingModel).embed("Test");
 	}
 
@@ -181,7 +186,7 @@ class ModelConfigOpsServiceTest {
 		when(modelConfigDataService.findById(4)).thenReturn(entity);
 
 		ChatModel chatModel = mock(ChatModel.class);
-		when(modelFactory.createChatModel(any(ModelConfigDTO.class))).thenReturn(chatModel);
+		when(modelFactory.createChatModel(any(ModelConfigDTO.class), any(RetryTemplate.class))).thenReturn(chatModel);
 		when(chatModel.call("Hello")).thenReturn("");
 
 		RuntimeException exception = assertThrowsExactly(RuntimeException.class, () -> service.testConnection(4));
@@ -197,7 +202,7 @@ class ModelConfigOpsServiceTest {
 		when(modelConfigDataService.findById(5)).thenReturn(entity);
 
 		EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
-		when(modelFactory.createEmbeddingModel(any(ModelConfigDTO.class))).thenReturn(embeddingModel);
+		when(modelFactory.createEmbeddingModel(any(ModelConfigDTO.class), any(RetryTemplate.class))).thenReturn(embeddingModel);
 		when(embeddingModel.embed("Test")).thenReturn(new float[0]);
 
 		RuntimeException exception = assertThrowsExactly(RuntimeException.class, () -> service.testConnection(5));
@@ -213,12 +218,69 @@ class ModelConfigOpsServiceTest {
 		when(modelConfigDataService.findById(6)).thenReturn(entity);
 
 		ChatModel chatModel = mock(ChatModel.class);
-		when(modelFactory.createChatModel(any(ModelConfigDTO.class))).thenReturn(chatModel);
+		when(modelFactory.createChatModel(any(ModelConfigDTO.class), any(RetryTemplate.class))).thenReturn(chatModel);
 		when(chatModel.call("Hello")).thenThrow(new RuntimeException());
 
 		RuntimeException exception = assertThrowsExactly(RuntimeException.class, () -> service.testConnection(6));
 
 		assertEquals("RuntimeException", exception.getMessage());
+	}
+
+	@Test
+	void testTestConnection_testChatModel_notRetry(){
+		ModelConfig entity = new ModelConfig();
+		entity.setId(7);
+		entity.setModelType(ModelType.CHAT);
+		when(modelConfigDataService.findById(7)).thenReturn(entity);
+
+		ChatModel chatModel = mock(ChatModel.class);
+		when(modelFactory.createChatModel(any(ModelConfigDTO.class), any(RetryTemplate.class))).thenReturn(chatModel);
+		when(chatModel.call("Hello")).thenReturn("Hello");
+
+		service.testConnection(7);
+
+		ArgumentCaptor<RetryTemplate> retryCaptor = ArgumentCaptor.forClass(RetryTemplate.class);
+		verify(modelFactory).createChatModel(any(ModelConfigDTO.class), retryCaptor.capture());
+		RetryTemplate retryTemplate = retryCaptor.getValue();
+
+		AtomicInteger attempts = new AtomicInteger(0);
+		assertThrows(
+				ResourceAccessException.class,
+				() -> retryTemplate.execute(context -> {
+					attempts.incrementAndGet();
+					throw new ResourceAccessException("mock connection failed");
+				})
+		);
+
+		assertEquals(1, attempts.get());
+	}
+
+	@Test
+	void testTestConnection_testEmbeddingModel_notRetry(){
+		ModelConfig entity = new ModelConfig();
+		entity.setId(8);
+		entity.setModelType(ModelType.EMBEDDING);
+		when(modelConfigDataService.findById(8)).thenReturn(entity);
+
+		EmbeddingModel embeddingModel = mock(EmbeddingModel.class);
+		when(modelFactory.createEmbeddingModel(any(ModelConfigDTO.class), any(RetryTemplate.class))).thenReturn(embeddingModel);
+		when(embeddingModel.embed("Test")).thenReturn(new float[1]);
+
+		service.testConnection(8);
+		ArgumentCaptor<RetryTemplate> retryCaptor = ArgumentCaptor.forClass(RetryTemplate.class);
+		verify(modelFactory).createEmbeddingModel(any(ModelConfigDTO.class), retryCaptor.capture());
+		RetryTemplate retryTemplate = retryCaptor.getValue();
+
+		AtomicInteger attempts = new AtomicInteger(0);
+		assertThrows(
+				ResourceAccessException.class,
+				() -> retryTemplate.execute(context -> {
+					attempts.incrementAndGet();
+					throw new ResourceAccessException("mock connection failed");
+				})
+		);
+
+		assertEquals(1, attempts.get());
 	}
 
 }

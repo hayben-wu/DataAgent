@@ -35,6 +35,7 @@ import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.ai.retry.RetryUtils;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.retry.support.RetryTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.Assert;
 import org.springframework.util.StringUtils;
@@ -52,7 +53,10 @@ public class DynamicModelFactory {
 	 * 统一使用 OpenAiChatModel，通过 baseUrl 实现多厂商兼容
 	 */
 	public ChatModel createChatModel(ModelConfigDTO config) {
+		return createChatModel(config, RetryUtils.DEFAULT_RETRY_TEMPLATE);
+	}
 
+	public ChatModel createChatModel(ModelConfigDTO config, RetryTemplate retryTemplate) {
 		log.info("Creating NEW ChatModel instance. Provider: {}, Model: {}, BaseUrl: {}", config.getProvider(),
 				config.getModelName(), config.getBaseUrl());
 		// 1. 验证参数
@@ -61,10 +65,10 @@ public class DynamicModelFactory {
 		// 2. 构建 OpenAiApi (核心通讯对象)
 		String apiKey = StringUtils.hasText(config.getApiKey()) ? config.getApiKey() : "";
 		OpenAiApi.Builder apiBuilder = OpenAiApi.builder()
-			.apiKey(apiKey)
-			.baseUrl(config.getBaseUrl())
-			.restClientBuilder(getProxiedRestClientBuilder(config))
-			.webClientBuilder(getProxiedWebClientBuilder(config));
+				.apiKey(apiKey)
+				.baseUrl(config.getBaseUrl())
+				.restClientBuilder(getProxiedRestClientBuilder(config))
+				.webClientBuilder(getProxiedWebClientBuilder(config));
 
 		if (StringUtils.hasText(config.getCompletionsPath())) {
 			apiBuilder.completionsPath(config.getCompletionsPath());
@@ -73,38 +77,46 @@ public class DynamicModelFactory {
 
 		// 3. 构建运行时选项 (设置默认的模型名称，如 "deepseek-chat" 或 "gpt-4")
 		OpenAiChatOptions openAiChatOptions = OpenAiChatOptions.builder()
-			.model(config.getModelName())
-			.temperature(config.getTemperature())
-			.maxTokens(config.getMaxTokens())
-			.streamUsage(true)
-			.build();
+				.model(config.getModelName())
+				.temperature(config.getTemperature())
+				.maxTokens(config.getMaxTokens())
+				.streamUsage(true)
+				.build();
 		// 4. 返回统一的 OpenAiChatModel
-		return OpenAiChatModel.builder().openAiApi(openAiApi).defaultOptions(openAiChatOptions).build();
+		if(retryTemplate == null)
+			retryTemplate = RetryUtils.DEFAULT_RETRY_TEMPLATE;
+		return OpenAiChatModel.builder().openAiApi(openAiApi).defaultOptions(openAiChatOptions).retryTemplate(retryTemplate).build();
 	}
 
 	/**
 	 * Embedding 同理
 	 */
 	public EmbeddingModel createEmbeddingModel(ModelConfigDTO config) {
+		return createEmbeddingModel(config, RetryUtils.DEFAULT_RETRY_TEMPLATE);
+	}
+
+	public EmbeddingModel createEmbeddingModel(ModelConfigDTO config, RetryTemplate retryTemplate) {
 		log.info("Creating NEW EmbeddingModel instance. Provider: {}, Model: {}, BaseUrl: {}", config.getProvider(),
 				config.getModelName(), config.getBaseUrl());
 		checkBasic(config);
 
 		String apiKey = StringUtils.hasText(config.getApiKey()) ? config.getApiKey() : "";
 		OpenAiApi.Builder apiBuilder = OpenAiApi.builder()
-			.apiKey(apiKey)
-			.baseUrl(config.getBaseUrl())
-			.restClientBuilder(getProxiedRestClientBuilder(config))
-			.webClientBuilder(getProxiedWebClientBuilder(config));
+				.apiKey(apiKey)
+				.baseUrl(config.getBaseUrl())
+				.restClientBuilder(getProxiedRestClientBuilder(config))
+				.webClientBuilder(getProxiedWebClientBuilder(config));
 
 		if (StringUtils.hasText(config.getEmbeddingsPath())) {
 			apiBuilder.embeddingsPath(config.getEmbeddingsPath());
 		}
 
 		OpenAiApi openAiApi = apiBuilder.build();
+		if(retryTemplate == null)
+			retryTemplate = RetryUtils.DEFAULT_RETRY_TEMPLATE;
 		return new OpenAiEmbeddingModel(openAiApi, MetadataMode.EMBED,
 				OpenAiEmbeddingOptions.builder().model(config.getModelName()).build(),
-				RetryUtils.DEFAULT_RETRY_TEMPLATE);
+				retryTemplate);
 	}
 
 	private static void checkBasic(ModelConfigDTO config) {

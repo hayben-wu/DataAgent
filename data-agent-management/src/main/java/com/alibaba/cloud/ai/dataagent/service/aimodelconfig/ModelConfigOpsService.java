@@ -23,10 +23,10 @@ import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.retry.support.RetryTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
-
 import java.util.Objects;
 
 @Slf4j
@@ -41,6 +41,8 @@ public class ModelConfigOpsService {
 	private final AiModelRegistry aiModelRegistry;
 
 	private final EmbeddingModelCompatibilityValidator embeddingModelCompatibilityValidator;
+
+	private static final RetryTemplate TEST_RETRY_TEMPLATE = RetryTemplate.builder().maxAttempts(1).build();
 
 	/**
 	 * 专门处理：更新配置并热刷新的聚合逻辑
@@ -154,7 +156,7 @@ public class ModelConfigOpsService {
 				config.getModelName());
 
 		// 1. 创建临时模型
-		ChatModel tempModel = modelFactory.createChatModel(config);
+		ChatModel tempModel = modelFactory.createChatModel(config, TEST_RETRY_TEMPLATE);
 
 		// 2. 发起最轻量的请求
 		String promptText = "Hello";
@@ -173,7 +175,7 @@ public class ModelConfigOpsService {
 		log.info("Testing Embedding Model connection, provider: {} modelName: {}", config.getProvider(),
 				config.getModelName());
 		// 1. 创建临时模型
-		EmbeddingModel tempModel = modelFactory.createEmbeddingModel(config);
+		EmbeddingModel tempModel = modelFactory.createEmbeddingModel(config, TEST_RETRY_TEMPLATE);
 
 		// 2. 发起请求
 		float[] embedding = tempModel.embed("Test");
