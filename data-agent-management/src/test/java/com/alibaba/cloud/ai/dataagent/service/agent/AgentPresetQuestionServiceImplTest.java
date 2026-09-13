@@ -133,4 +133,22 @@ class AgentPresetQuestionServiceImplTest {
 		verify(mapper, never()).insert(any());
 	}
 
+	@Test
+	void testBatchSave_stopsAndPropagatesWhenInsertFails() {
+		AgentPresetQuestion q1 = new AgentPresetQuestion();
+		q1.setQuestion("q1");
+		AgentPresetQuestion q2 = new AgentPresetQuestion();
+		q2.setQuestion("q2");
+		AgentPresetQuestion q3 = new AgentPresetQuestion();
+		q3.setQuestion("q3");
+
+		when(mapper.insert(any(AgentPresetQuestion.class)))
+				.thenReturn(1)
+				.thenThrow(new RuntimeException("模拟第二条数据插入时异常"));
+
+		assertThrows(RuntimeException.class, () -> service.batchSave(1L, List.of(q1, q2, q3)));
+		verify(mapper, times(1)).deleteByAgentId(1L);
+		verify(mapper, times(2)).insert(any(AgentPresetQuestion.class));
+	}
+
 }
